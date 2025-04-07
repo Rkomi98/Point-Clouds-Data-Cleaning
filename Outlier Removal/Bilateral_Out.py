@@ -9,7 +9,7 @@ import numpy as np
 import open3d as o3d
 from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
 from joblib import Parallel, delayed, parallel_backend
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, classification_report
 import time  # Import for time measurement
 
 def create_output_folder(folder_path):
@@ -122,112 +122,151 @@ def calculate_l_inf_norm(original_points, filtered_points):
 
 def evaluate_combined_results(df_combined, log_file_path, displacement_threshold=0.1, parameter_setting="None"):
     """
-    Evaluates the combined results of SOR and Bilateral Filtering, including:
-    - Confusion matrices (multi-class and binary)
-    - Misclassification breakdown for real points by original tag
-    - Recall for Outlier (SOR) and Noise (Bilateral)
-    - Visualization of the confusion matrix
+    Enhanced evaluation of results with detailed classification breakdown
+    
+    Parameters:
+    - df_combined: DataFrame with original and predicted tags
+    - log_file_path: Path to log file for detailed results
+    - displacement_threshold: Threshold for displacement classification
+    - parameter_setting: String describing parameter settings used
     """
+
+    # Ensure output directory exists
     os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
     start_time = time.time()
 
-    # --- 1. Prepare Ground Truth and Predictions ---
-    df_combined['Tag_binary'] = np.where(
-        df_combined['Tag'].isin(['Outlier', 'Noise']),
-        'Anomaly',
-        'Real points'
-    )
-    df_combined['predicted_binary'] = np.where(
-        df_combined['predicted_tag'].isin(['Outlier', 'Noise']),
-        'Anomaly',
-        'Real points'
-    )
+    # Define all possible original point classes
+    original_classes = df_combined['Tag'].unique().tolist()
+    prediction_classes = original_classes #+ ['Noise', 'Outlier']
 
-    # --- 2. Multi-Class Metrics (Outlier, Noise, Real) ---
-    labels = ['Outlier', 'Noise', 'Real points']
-    y_true = df_combined['Tag']
-    y_pred = df_combined['predicted_tag']
-    conf_matrix = confusion_matrix(y_true, y_pred, labels=labels)
+    # Create a copy of the DataFrame to avoid modifying the original
+    df_eval = df_combined.copy()
 
-    # --- 3. Recall for Outlier (SOR) and Noise (Bilateral) ---
-    outlier_true = (y_true == 'Outlier')
-    outlier_pred = (y_pred == 'Outlier')
-    noise_true = (y_true == 'Noise')
-    noise_pred = (y_pred == 'Noise')
+    # Ensure predicted_tag exists and is filled
+    if 'predicted_tag' not in df_eval.columns:
+        df_eval['predicted_tag'] = 'Unknown'
 
-    outlier_recall = np.sum(outlier_true & outlier_pred) / np.sum(outlier_true) if np.sum(outlier_true) > 0 else 0
-    noise_recall = np.sum(noise_true & noise_pred) / np.sum(noise_true) if np.sum(noise_true) > 0 else 0
+    # Prepare true and predicted labels
+    y_true = df_eval['Tag']
+    y_pred = df_eval['predicted_tag']
 
-    # --- 4. Misclassified Real Points Breakdown ---
-    # Points that are truly real but predicted as anomalies
-    misclassified_real_mask = (df_combined['Tag_binary'] == 'Real points') & \
-                              (df_combined['predicted_binary'] == 'Anomaly')
-    misclassified_real_points = df_combined[misclassified_real_mask]
+    # Compute confusion matrix
+    conf_matrix = confusion_matrix(y_true, y_pred, labels=prediction_classes)
 
-    # Group by original tag (e.g., Vegetation, Terrain)
-    misclassified_by_tag = misclassified_real_points['Tag'].value_counts()
-    total_real_by_tag = df_combined[df_combined['Tag_binary'] == 'Real points']['Tag'].value_counts()
-    misclassified_percentage = (misclassified_by_tag / total_real_by_tag * 100).fillna(0).round(2)
-    end_time = time.time()
-    time_needed = start_time - end_time
+    # Compute row-wise percentages
+    conf_matrix_percentages = conf_matrix.astype('float') / conf_matrix.sum(axis=1)[:, np.newaxis] * 100
+    conf_matrix_percentages = np.round(conf_matrix_percentages, 2)
 
-    # --- 5. Binary Metrics ---
-    accuracy = accuracy_score(df_combined['Tag_binary'], df_combined['predicted_binary'])
-    precision = precision_score(df_combined['Tag_binary'], df_combined['predicted_binary'], pos_label='Anomaly')
-    recall = recall_score(df_combined['Tag_binary'], df_combined['predicted_binary'], pos_label='Anomaly')
-    f1 = f1_score(df_combined['Tag_binary'], df_combined['predicted_binary'], pos_label='Anomaly')
+    # Compute classification report
+    class_report = classification_report(y_true, y_pred, labels=prediction_classes)
 
-    # --- 6. Confusion Matrix Visualization ---
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(conf_matrix, annot=True, fmt="d", cmap="Blues", cbar=False,
-                xticklabels=labels, yticklabels=labels)
+    # Compute detailed classification breakdown
+    detailed_breakdown = {}
+    for original_class in original_classes:
+        # Filter points of this original class
+        class_points = df_eval[df_eval['Tag'] == original_class]
+        total_class_points = len(class_points)
+        
+        # Count predictions for this class
+        prediction_counts = class_points['predicted_tag'].value_counts()
+        
+        # Calculate percentages
+        prediction_percentages = (prediction_counts / total_class_points * 100).round(2)
+        
+        detailed_breakdown[original_class] = {
+            'total_points': total_class_points,
+            'prediction_counts': prediction_counts.to_dict(),
+            'prediction_percentages': prediction_percentages.to_dict()
+        }
+
+    # Visualization of Confusion Matrix
+    plt.figure(figsize=(12, 10))
+    
+    # Create a combined heatmap with absolute numbers and percentages
+    combined_matrix = np.zeros((len(prediction_classes), len(prediction_classes)), dtype=object)
+    for i in range(len(prediction_classes)):
+        for j in range(len(prediction_classes)):
+            combined_matrix[i, j] = f"{conf_matrix[i, j]}\n({conf_matrix_percentages[i, j]:.2f}%)"
+    
+    sns.heatmap(conf_matrix, annot=combined_matrix, fmt="", cmap="Blues", 
+                xticklabels=prediction_classes, yticklabels=prediction_classes)
+    plt.title("Confusion Matrix: Detailed Point Classification\n(Count and Row Percentage)")
     plt.xlabel("Predicted Labels")
     plt.ylabel("True Labels")
-    plt.title("Confusion Matrix: Outlier, Noise, Real Points")
-    confusion_matrix_path = os.path.join(os.path.dirname(log_file_path), "confusion_matrix.png")
-    plt.savefig(confusion_matrix_path)
+    plt.tight_layout()
+    
+    confusion_matrix_path = os.path.join(os.path.dirname(log_file_path), "detailed_confusion_matrix.png")
+    plt.savefig(confusion_matrix_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    # --- 7. Logging ---
-    with open(log_file_path, 'a') as f:
-        f.write(f"\n\n=== Evaluation for Parameters: {parameter_setting} ===\n")
-        f.write(f"Time needed (Bilateral): {time_needed:.4f}\n")
-        # Multi-class metrics
-        f.write("\n--- Multi-Class Metrics ---\n")
-        f.write(f"Outlier Recall (SOR): {outlier_recall:.4f}\n")
-        f.write(f"Noise Recall (Bilateral): {noise_recall:.4f}\n")
-        f.write("Confusion Matrix (Rows: True, Columns: Predicted):\n")
-        f.write(pd.DataFrame(conf_matrix, index=labels, columns=labels).to_string() + "\n")
+    # Logging results
+    with open(log_file_path, 'w') as f:
+        f.write(f"=== Detailed Evaluation for Parameters: {parameter_setting} ===\n\n")
         
-        # Binary metrics
-        f.write("\n--- Binary Metrics (Anomaly vs Real) ---\n")
-        f.write(f"Accuracy: {accuracy:.4f}\n")
-        f.write(f"Precision: {precision:.4f}\n")
-        f.write(f"Recall: {recall:.4f}\n")
-        f.write(f"F1 Score: {f1:.4f}\n")
+        # Log Confusion Matrix
+        f.write("--- Confusion Matrix ---\n")
+        conf_matrix_df = pd.DataFrame(conf_matrix, 
+                                      index=prediction_classes, 
+                                      columns=prediction_classes)
+        percentage_matrix_df = pd.DataFrame(
+            data=conf_matrix_percentages, 
+            index=prediction_classes, 
+            columns=prediction_classes
+        )
+        f.write(conf_matrix_df.to_string() + "\n\n")
+        f.write("Percentages (%):\n")
+        f.write(percentage_matrix_df.to_string() + "\n\n")
         
-        # Misclassification breakdown
-        f.write("\n--- Misclassified Real Points ---\n")
-        f.write("Breakdown by Original Tag:\n")
-        breakdown_df = pd.DataFrame({
-            'Total Points': total_real_by_tag,
-            'Misclassified Count': misclassified_by_tag,
-            'Misclassified %': misclassified_percentage
-        }).fillna(0)
-        f.write(breakdown_df.to_string() + "\n")
+        # Log Classification Report
+        f.write("--- Classification Report ---\n")
+        f.write(class_report + "\n\n")
+        
+        # Log Detailed Breakdown
+        f.write("--- Detailed Classification Breakdown ---\n")
+        for original_class, breakdown in detailed_breakdown.items():
+            f.write(f"{original_class}:\n")
+            f.write(f"  Total Points: {breakdown['total_points']}\n")
+            f.write("  Prediction Breakdown:\n")
+            for pred_class, count in breakdown['prediction_counts'].items():
+                percentage = breakdown['prediction_percentages'].get(pred_class, 0)
+                f.write(f"    {pred_class}: {count} points ({percentage}%)\n")
+            f.write("\n")
 
-        # Confusion matrix plot path
-        f.write(f"\nConfusion Matrix saved to: {confusion_matrix_path}\n")
+    # Print paths for confirmation
+    print(f"Detailed evaluation logged to: {log_file_path}")
+    print(f"Confusion Matrix visualization saved to: {confusion_matrix_path}")
 
-    print(f"Full evaluation logged to: {log_file_path}")
-    print(f"Confusion Matrix saved to: {confusion_matrix_path}")
-
+    return detailed_breakdown
+def export_point_cloud(df, file_path):
+    """
+    Exports a DataFrame to a LAS file.
+    """
+    header = laspy.LasHeader(point_format=3, version='1.4')
+    header.scales = [0.01, 0.01, 0.01]
+    header.offsets = [0, 0, 0]
+    
+    las = laspy.LasData(header)
+    las.x = df['X'].values
+    las.y = df['Y'].values
+    las.z = df['Z'].values
+    
+    if 'Red' in df.columns:
+        las.red = (df['Red'].values * 65535).astype(np.uint16)
+        las.green = (df['Green'].values * 65535).astype(np.uint16)
+        las.blue = (df['Blue'].values * 65535).astype(np.uint16)
+    
+    if 'Tag' in df.columns:
+        tag_mapping = {"Vegetation": 1, "Terrain": 2, "Metals": 3, "Asbestos": 4, "Tyres": 5, "Plastics": 6, "Noise": 7, "Outlier": 8}
+        las.classification = df['Tag'].map(tag_mapping).fillna(0).astype(np.uint8)
+    
+    las.write(file_path)
+    print(f"Exported point cloud to {file_path}")
 
 if __name__ == "__main__":
-    output_folder = "./Bilateral_SORBF_S"
+    output_folder = "./Bilateral_SORBF_S/Aggressive"
     create_output_folder(output_folder)
 
-    file_path = '/data/landfills_UAV/3dData/FinalMesh/Asbestos2.las'
+    file_path = 'C:/Users/Legion-pc-polimi/Documents/SyntheticDataLidar/Asbestos2.las'
     """
     Imports a LAS file and converts it into a Polars DataFrame with X, Y, Z, R, G, B, and Tag columns.
     """
@@ -288,6 +327,9 @@ if __name__ == "__main__":
     df = df[df['Z'] >= min_terrain_z]
     df_noisy = add_noise_to_dataframe(df, noise_percentage=10, position_noise_std=1, color_noise_std=1)
     df_noisy = add_outliers_to_dataframe(df_noisy)
+    # Export noisy data
+    noisy_las_path = os.path.join(output_folder, "noisy_point_cloud.las")
+    export_point_cloud(df_noisy, noisy_las_path)
 
     #file_path = '/data/landfills_UAV/3dData/PointClouds/odm_georeferenced_model_Chiuduno.las'
 
@@ -337,8 +379,9 @@ if __name__ == "__main__":
     df_sor_inliers['predicted_tag'] = np.where(
         displacement > DISPLACEMENT_THRESHOLD,
         'Noise',
-        'Real points'
+        df_sor_inliers['Tag']
     )
+    #TODO Cambiare 'Real Points' con df_sor_inliers['Tag'] o simile. Inoltre aggiornare CM con i tag presenti nella PC
 
     # Combine all points for evaluation
     df_combined = pd.concat([df_sor_inliers, df_sor_outliers], ignore_index=True)
@@ -350,5 +393,62 @@ if __name__ == "__main__":
         displacement_threshold=DISPLACEMENT_THRESHOLD,
         parameter_setting=f"SOR: {SOR_PARAMS}, Bilateral: {BILATERAL_PARAMS}"
     )
+
+    predicted_tag_mapping = {
+        "Vegetation": 1,
+        "Terrain": 2,
+        "Metals": 3,
+        "Asbestos": 4,
+        "Tyres": 5,
+        "Plastics": 6,
+        "Noise": 7,
+        "Outlier": 8,
+        "Unknown": 0  # Default for unmapped tags
+    }
+
+    # Convert predicted tags to numeric values
+    df_combined['predicted_tag_numeric'] = df_combined['predicted_tag'].map(predicted_tag_mapping).fillna(0).astype(np.uint8)
+
+    # Create a new LAS header with extra dimension for predicted tag
+    new_header = laspy.LasHeader(
+        version=las_file.header.version,
+        point_format=las_file.header.point_format
+    )
+    new_header.scales = las_file.header.scales
+    new_header.offsets = las_file.header.offsets
+    
+    # Add predicted_tag as an extra dimension if not already present
+    if not hasattr(new_header, 'predicted_tag'):
+        new_header.add_extra_dim(laspy.ExtraBytesParams(
+            name="predicted_tag",
+            type=np.uint8,
+            description="Predicted classification tag"
+        ))
+
+    # Create new LAS file
+    new_las = laspy.LasData(new_header)
+    new_las.x = df_combined['X'].values
+    new_las.y = df_combined['Y'].values
+    new_las.z = df_combined['Z'].values
+
+    # Handle color channels if present
+    if 'Red' in df_combined.columns:
+        new_las.red = (df_combined['Red'].values * 65535).astype(np.uint16)
+        new_las.green = (df_combined['Green'].values * 65535).astype(np.uint16)
+        new_las.blue = (df_combined['Blue'].values * 65535).astype(np.uint16)
+
+    # Preserve original classification if available
+    if 'tag' in new_las.point_format.dimension_names:
+        original_tag_mapping = {v: k for k, v in tag_mapping.items()}
+        df_combined['original_tag_numeric'] = df_combined['Tag'].map(tag_mapping).fillna(0).astype(np.uint8)
+        new_las.tag = df_combined['original_tag_numeric'].values
+
+    # Add predicted tags
+    new_las.predicted_tag = df_combined['predicted_tag_numeric'].values
+
+    # Write output file
+    output_las_path = os.path.join(output_folder, "classified_with_predictions.las")
+    new_las.write(output_las_path)
+    print(f"Exported LAS file with predictions to: {output_las_path}")
 
     
