@@ -1,0 +1,64 @@
+=== Detailed Evaluation ===
+Parameter Setting: SOR: {'nb_neighbors': 15, 'std_ratio': 7.0}, Bilateral: {'num_neighbors': 10, 'sigma_s': 1.0, 'sigma_c': 1.0}
+Displacement Threshold: 0.1
+Evaluation Time: 14.38 seconds
+
+--- Confusion Matrix (Counts) ---
+            Asbestos  Noise  Outlier  Terrain  Vegetation
+Asbestos      204510      0        0        0           0
+Noise              0  51206     1060        0       36828
+Outlier            0     54      496        0           0
+Terrain            0    687        0    95535           0
+Vegetation         0  50388       18        0      539805
+
+--- Confusion Matrix (Row Percentages) ---
+            Asbestos  Noise  Outlier  Terrain  Vegetation
+Asbestos       100.0   0.00     0.00     0.00        0.00
+Noise            0.0  57.47     1.19     0.00       41.34
+Outlier          0.0   9.82    90.18     0.00        0.00
+Terrain          0.0   0.71     0.00    99.29        0.00
+Vegetation       0.0   8.54     0.00     0.00       91.46
+
+--- Classification Report (Precision, Recall, F1-Score) ---
+              precision    recall  f1-score   support
+
+    Asbestos       1.00      1.00      1.00    204510
+       Noise       0.50      0.57      0.53     89094
+     Outlier       0.32      0.90      0.47       550
+     Terrain       1.00      0.99      1.00     96222
+  Vegetation       0.94      0.91      0.93    590211
+
+    accuracy                           0.91    980587
+   macro avg       0.75      0.88      0.78    980587
+weighted avg       0.92      0.91      0.91    980587
+
+
+--- Per-Class Accuracy (%) ---
+  Asbestos: 100.00%
+  Noise: 90.92%
+  Outlier: 99.88%
+  Terrain: 99.93%
+  Vegetation: 91.10%
+
+--- Detailed Classification Breakdown (True Label -> Predicted) ---
+Asbestos (Total: 204510):
+    -> Asbestos: 204510 points (100.00%)
+
+Noise (Total: 89094):
+    -> Noise: 51206 points (57.47%)
+    -> Outlier: 1060 points (1.19%)
+    -> Vegetation: 36828 points (41.34%)
+
+Outlier (Total: 550):
+    -> Noise: 54 points (9.82%)
+    -> Outlier: 496 points (90.18%)
+
+Terrain (Total: 96222):
+    -> Noise: 687 points (0.71%)
+    -> Terrain: 95535 points (99.29%)
+
+Vegetation (Total: 590211):
+    -> Noise: 50388 points (8.54%)
+    -> Outlier: 18 points (0.00%)
+    -> Vegetation: 539805 points (91.46%)
+
